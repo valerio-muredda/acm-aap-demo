@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-ruler-custom-rules
+  namespace: open-cluster-management-observability
+  labels:
+    faro.io/rule-configmap: "true"
+data:
+  custom_rules.yaml: | # <--- This pipe is for the ConfigMap data
+    groups:
+      - name: acm-eda-multicluster.rules
+        rules:
+          - alert: DummyAlertTriggered
+            # The PromQL 'unless' trick to find missing metrics across clusters
+            expr: sum by (cluster) (up) unless sum by (cluster) (kube_configmap_info{configmap="eda-trigger-map", namespace="default"})
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "EDA Trigger Map is missing on cluster: {{ $labels.cluster }}"
+              description: "Centralized ACM alert. Triggering EDA remediation for {{ $labels.cluster }}."

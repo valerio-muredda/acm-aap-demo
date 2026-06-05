@@ -1,0 +1,141 @@
+---
+- name: Universal Multi-Cluster Dynamic Remediation via RHACM
+  hosts: localhost
+  gather_facts: false
+  vars:
+    sa_name: "eda-remediation-sa"
+
+  tasks:
+    - name: Validate target cluster variable context
+      ansible.builtin.fail:
+        msg: "The 'target_cluster' variable is undefined. Ensure EDA passes it via extra_vars."
+      when: target_cluster is undefined
+
+    # ----------------------------------------------------------------
+    # STEP 1: Discover Target API URL dynamically
+    # ----------------------------------------------------------------
+    # Every managed cluster registers its true API endpoint in this resource
+    - name: Discover the true API URL for the target cluster
+      kubernetes.core.k8s_info:
+        api_key: "{{ lookup('env', 'K8S_AUTH_API_KEY') }}"
+        host: "{{ lookup('env', 'K8S_AUTH_HOST') }}"
+        validate_certs: false
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ target_cluster }}"
+      register: mcluster_info
+
+    - name: Set API URL fact
+      ansible.builtin.set_fact:
+        target_api_url: "{{ mcluster_info.resources[0].spec.managedClusterClientConfigs[0].url }}"
+
+    # ----------------------------------------------------------------
+    # STEP 2: Request the MSA token
+    # ----------------------------------------------------------------
+    - name: Create ManagedServiceAccount resource on the Hub
+      kubernetes.core.k8s:
+        api_key: "{{ lookup('env', 'K8S_AUTH_API_KEY') }}"
+        host: "{{ lookup('env', 'K8S_AUTH_HOST') }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: authentication.open-cluster-management.io/v1beta1
+          kind: ManagedServiceAccount
+          metadata:
+            name: "{{ sa_name }}"
+            namespace: "{{ target_cluster }}"
+          spec:
+            rotation:
+              enabled: true
+              validity: 24h
+
+    # ----------------------------------------------------------------
+    # STEP 3: Grant Admin Permissions via ManifestWork
+    # ----------------------------------------------------------------
+    - name: Create ManifestWork to bind admin rights to the MSA
+      kubernetes.core.k8s:
+        api_key: "{{ lookup('env', 'K8S_AUTH_API_KEY') }}"
+        host: "{{ lookup('env', 'K8S_AUTH_HOST') }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: work.open-cluster-management.io/v1
+          kind: ManifestWork
+          metadata:
+            name: "{{ sa_name }}-rbac-work"
+            namespace: "{{ target_cluster }}"
+          spec:
+            workload:
+              manifests:
+                - apiVersion: rbac.authorization.k8s.io/v1
+                  kind: ClusterRoleBinding
+                  metadata:
+                    name: "open-cluster-management:{{ sa_name }}-admin-binding"
+                  subjects:
+                    - kind: ServiceAccount
+                      name: "{{ sa_name }}"
+                      namespace: open-cluster-management-agent-addon
+                  roleRef:
+                    kind: ClusterRole
+                    name: admin
+                    apiGroup: rbac.authorization.k8s.io
+
+    # ----------------------------------------------------------------
+    # STEP 4: Wait for ManifestWork sync
+    # ----------------------------------------------------------------
+    - name: Wait for ManifestWork to become Applied and Available
+      kubernetes.core.k8s_info:
+        api_key: "{{ lookup('env', 'K8S_AUTH_API_KEY') }}"
+        host: "{{ lookup('env', 'K8S_AUTH_HOST') }}"
+        validate_certs: false
+        api_version: work.open-cluster-management.io/v1
+        kind: ManifestWork
+        namespace: "{{ target_cluster }}"
+        name: "{{ sa_name }}-rbac-work"
+      register: rbac_work_status
+      until: >
+        rbac_work_status.resources | length > 0 and
+        (rbac_work_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Applied') | selectattr('status', 'equalto', 'True') | list | length > 0)
+      retries: 15
+      delay: 4
+
+    # ----------------------------------------------------------------
+    # STEP 5: Wait for Token Secret
+    # ----------------------------------------------------------------
+    - name: Wait for the dynamic token secret to be created
+      kubernetes.core.k8s_info:
+        api_key: "{{ lookup('env', 'K8S_AUTH_API_KEY') }}"
+        host: "{{ lookup('env', 'K8S_AUTH_HOST') }}"
+        validate_certs: false
+        kind: Secret
+        namespace: "{{ target_cluster }}"
+        name: "{{ sa_name }}"
+      register: sa_secret
+      until: sa_secret.resources | length > 0 and 'token' in sa_secret.resources[0].data
+      retries: 15
+      delay: 4
+
+    # ----------------------------------------------------------------
+    # STEP 6: Extract the Spoke Token
+    # ----------------------------------------------------------------
+    - name: Parse the dynamic cluster token from token payload
+      ansible.builtin.set_fact:
+        spoke_token: "{{ sa_secret.resources[0].data.token | b64decode }}"
+
+    # ----------------------------------------------------------------
+    # STEP 7: Apply directly using discovered API URL
+    # ----------------------------------------------------------------
+    - name: Apply the ConfigMap universally
+      kubernetes.core.k8s:
+        api_key: "{{ spoke_token }}"
+        host: "{{ target_api_url }}" # Uses the dynamically discovered true API URL
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: eda-trigger-map
+            namespace: default
+          data:
+            status: "remediated-universally"

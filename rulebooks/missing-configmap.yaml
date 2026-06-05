@@ -1,0 +1,17 @@
+---
+- name: Listen for ACM Multicluster Alerts
+  hosts: all
+  sources:
+    - ansible.eda.alertmanager: {}
+
+  rules:
+    - name: Trigger Remediation for Dummy Alert
+      condition: event.payload.alerts[0].labels.alertname == "DummyAlertTriggered" and event.payload.status == "firing"
+      action:
+        run_job_template:
+          name: "Multicluster Remediate Missing ConfigMap"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              target_cluster: "{{ event.payload.alerts[0].labels.cluster }}"
+              alert_summary: "{{ event.payload.alerts[0].annotations.summary }}"

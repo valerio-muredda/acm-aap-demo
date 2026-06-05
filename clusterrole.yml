@@ -1,0 +1,53 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: aap-integration-serviceaccount-role
+rules:
+  - verbs:
+      - get
+      - list
+      - watch
+    apiGroups:
+      - ''
+    resources:
+      - secrets
+  - verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+    apiGroups:
+      - authentication.open-cluster-management.io
+      - work.open-cluster-management.io
+      - addon.open-cluster-management.io
+      - cluster.open-cluster-management.io
+    resources:
+      - managedserviceaccounts
+      - manifestworks
+      - managedclusteraddons
+      - managedserviceaccounts/finalizers
+      - manifestworks/finalizers
+      - managedclusteraddons/finalizers
+      - managedclusters
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: aap-integration-serviceaccount-rb
+subjects:
+  - kind: ServiceAccount
+    name: aap-integration-serviceaccount
+    namespace: aap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aap-integration-serviceaccount-role
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: aap-integration-serviceaccount
+  namespace: aap
