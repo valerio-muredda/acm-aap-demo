@@ -1,5 +1,5 @@
 ---
-- name: Universal Multi-Cluster Dynamic Remediation via RHACM
+- name: Multi-Cluster Dynamic Remediation via RHACM
   hosts: localhost
   gather_facts: false
   vars:
@@ -125,7 +125,7 @@
     # ----------------------------------------------------------------
     # STEP 7: Apply directly using discovered API URL
     # ----------------------------------------------------------------
-    - name: Apply the ConfigMap universally
+    - name: Apply the ConfigMap
       kubernetes.core.k8s:
         api_key: "{{ spoke_token }}"
         host: "{{ target_api_url }}" # Uses the dynamically discovered true API URL
@@ -138,4 +138,4 @@
             name: eda-trigger-map
             namespace: default
           data:
-            status: "remediated-universally"
+            status: "remediated"
